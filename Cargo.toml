@@ -3,5 +3,14 @@ name = "ie_vr_decrypt"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+lto = true        # Link Time Optimization
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [dependencies]
-bitflags = "2.10.0"
+bitflags = "2"
+clap = { version = "4.5", features = ["derive"] }
+indicatif = { version = "0.18", features = ["rayon"] }
+rayon = "1.11"

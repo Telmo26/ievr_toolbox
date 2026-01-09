@@ -4,7 +4,6 @@ pub struct CriwareCrypt {
     input_file: File,
     keys: [u8; 4],
     crc32table: [u32; 256],
-    
 }
 
 impl CriwareCrypt {
@@ -53,30 +52,54 @@ impl CriwareCrypt {
     }
 
     fn decrypt_block(&mut self, buffer: &mut [u8], file_offset: u64) {
-        let mut current_crc = self.update_crc_state((file_offset & !3) as u32);
-        for i in 0..buffer.len() {
-            let global_pos = file_offset + i as u64;
+        // let mut i = 0;
+        // while i + 4 < buffer.len() {
+        //     let global_pos = file_offset + i as u64;
 
-            if (global_pos & 3) == 0 {
-                current_crc = self.update_crc_state(global_pos as u32);
-            }
-
-            let base_shift = (global_pos & 3) << 1;
+        //     let crc = self.update_crc_state(global_pos as u32);            
             
-            let mut r8 = (current_crc >> (base_shift +8)) & 3;
-            let mut rdx = (current_crc >> base_shift) & 0xFF;
-            let mut mask = (rdx << 2) & 0xFF;
-            r8 |= mask;
+        //     let keys = key_stream(crc);
 
-            rdx = (current_crc >> (base_shift + 16)) & 3;
-            mask = (r8 << 2) & 0xFF;
-            r8 = mask | rdx;
+        //     buffer[i..i+4].iter_mut()
+        //         .zip(keys)
+        //         .for_each(|(b, k)| {
+        //             *b ^= k
+        //         });
 
-            rdx = (current_crc >> (base_shift + 24)) & 3;
-            mask = (r8 << 2) & 0xFF;
-            r8 = mask | rdx;
+        //     i += 4;
+        // }
+        let (prefix, middle, suffix) = unsafe { buffer.align_to_mut::<u32>() };
+        
+        let mut current_pos = file_offset;
 
-            buffer[i] ^= r8 as u8;
+        // 2. Handle leading bytes (if any) to reach u32 alignment
+        for byte in prefix {
+            let crc = self.update_crc_state(current_pos as u32);
+            let ks = key_stream(crc)[current_pos as usize % 4];
+            *byte ^= ks;
+            current_pos += 1;
+        }
+
+        // 3. HOT LOOP: Process 4 bytes at a time
+        for chunk in middle {
+            // We use the global position of the START of this 4-byte chunk
+            let crc = self.update_crc_state(current_pos as u32);
+            
+            // Compute the entire 4-byte keystream as a u32
+            let key = key_stream_u32(crc); // u32::from_le_bytes(key_stream(crc));
+            
+            // Single XOR operation for 4 bytes
+            *chunk ^= key;
+            
+            current_pos += 4;
+        }
+
+        // 4. Handle trailing bytes (if any)
+        for byte in suffix {
+            let crc = self.update_crc_state(current_pos as u32);
+            let ks = key_stream(crc)[current_pos as usize % 4];
+            *byte ^= ks;
+            current_pos += 1;
         }
     }
 
@@ -113,12 +136,67 @@ impl CriwareCrypt {
     fn update_crc_state(&mut self, seed: u32) -> u32 {
         let mut crc = !seed;
 
-        for k in 0..4 {
-            let mut index = (crc & 0xFF) as u8;
-            index ^= self.keys[k];
-            crc = (crc >> 8) ^ self.crc32table[index as usize];
-        }
+        let mut idx = ((crc & 0xFF) as u8) ^ self.keys[0];
+        crc = (crc >> 8) ^ self.crc32table[idx as usize];
+
+        idx = ((crc & 0xFF) as u8) ^ self.keys[1];
+        crc = (crc >> 8) ^ self.crc32table[idx as usize];
+
+        idx = ((crc & 0xFF) as u8) ^ self.keys[2];
+        crc = (crc >> 8) ^ self.crc32table[idx as usize];
+
+        idx = ((crc & 0xFF) as u8) ^ self.keys[3];
+        crc = (crc >> 8) ^ self.crc32table[idx as usize];
 
         !crc
     }
+}
+
+fn key_stream(crc: u32) -> [u8; 4] {
+    let mut keys = [0u8; 4];
+    for line in 0..4 {
+        let base_shift = line << 1;
+        let mut r8 = (crc >> (base_shift + 8)) & 3;
+        let mut rdx = (crc >> base_shift) & 0xFF;
+        let mut mask = (rdx << 2) & 0xFF;
+        r8 |= mask;
+
+        rdx = (crc >> (base_shift + 16)) & 3;
+        mask = (r8 << 2) & 0xFF;
+        r8 = mask | rdx;
+
+        rdx = (crc >> (base_shift + 24)) & 3;
+        mask = (r8 << 2) & 0xFF;
+        r8 = mask | rdx;
+
+        keys[line] = r8 as u8;
+    }
+    keys    
+}
+
+#[inline(always)]
+fn key_stream_u32(crc: u32) -> u32 {
+    let mut final_ks: u32 = 0;
+
+    // We still use a small unrolled loop because the 'shift' varies per lane,
+    // but the bit-logic inside is now flattened for the compiler to optimize.
+    for lane in 0..4 {
+        let s = lane << 1;
+        
+        let mut r8 = (crc >> (s + 8)) & 3;
+        
+        // Original logic: rdx = (crc >> s) & 0xFF; r8 |= (rdx << 2) & 0xFF
+        r8 = (r8 | (((crc >> s) & 0xFF) << 2)) & 0xFF;
+
+        // Original logic: rdx = (crc >> (s + 16)) & 3; r8 = ((r8 << 2) & 0xFF) | rdx
+        r8 = ((r8 << 2) & 0xFF) | ((crc >> (s + 16)) & 3);
+
+        // Original logic: rdx = (crc >> (s + 24)) & 3; r8 = ((r8 << 2) & 0xFF) | rdx
+        r8 = ((r8 << 2) & 0xFF) | ((crc >> (s + 24)) & 3);
+
+        // Pack into the u32 so that lane 0 is the first byte in memory (LE)
+        final_ks |= (r8 as u32) << (lane * 8);
+    }
+
+    final_ks
 }

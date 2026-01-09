@@ -8,8 +8,6 @@ pub fn toc_finder(table: &UTFTable) -> Option<(u64, u64)> {
 
     let mut columns = Vec::with_capacity(table.metadata.column_count as usize);
 
-    println!("String pool offset: {:X}", table.metadata.string_pool_offset);
-
     let string_pool = &table.data[table.metadata.string_pool_offset as usize..];
     let mut col_ptr = table.metadata.first_column_pos();
 
@@ -20,7 +18,6 @@ pub fn toc_finder(table: &UTFTable) -> Option<(u64, u64)> {
         if column.has_name() {
             let name_offset = column.string_offset(&table.data[col_ptr as usize..]);
             let name = read_utf_string(string_pool, name_offset as usize);
-            println!("Column name: {}", name);
 
             if name == "TocOffset" {
                 toc_col = col_index;
@@ -46,9 +43,9 @@ pub fn toc_finder(table: &UTFTable) -> Option<(u64, u64)> {
 
     for (i, column) in columns.iter().enumerate() {
         if i == toc_col {
-            toc_offset = Some(column.read_number_long(&table.data[row_ptr..]));
+            toc_offset = Some(column.read_number(&table.data[row_ptr..]));
         } else if i == content_col {
-            content_offset = Some(column.read_number_long(&table.data[row_ptr..]));
+            content_offset = Some(column.read_number(&table.data[row_ptr..]));
         }
 
         if toc_offset.is_some() && content_offset.is_some() {
@@ -92,7 +89,6 @@ pub fn toc_reader(table: &UTFTable, content_offset: u64) -> Vec<CpkFile> {
         if column.has_name() {
             let name_offset = column.string_offset(&table.data[col_ptr as usize..]);
             let name = read_utf_string(string_pool, name_offset as usize);
-            // println!("Column name: {}", name);
 
             match name.as_str() { 
                 "DirName" => dir_name_col_idx = col_index,
@@ -161,11 +157,11 @@ pub fn toc_reader(table: &UTFTable, content_offset: u64) -> Vec<CpkFile> {
                     let string_offset = u32::from_be_bytes(data.try_into().unwrap());
                     cpk_file.file_name = read_utf_string(&string_pool, string_offset as usize);
                 } else if col_idx == file_size_col_idx {
-                    cpk_file.file_size = column.read_number_int(&data) as u32;
+                    cpk_file.file_size = column.read_number(&data) as u32;
                 } else if col_idx == extract_size_col_idx {
-                    cpk_file.extract_size = column.read_number_int(&data) as u32;
+                    cpk_file.extract_size = column.read_number(&data) as u32;
                 } else if col_idx == file_offset_col_idx {
-                    cpk_file.file_offset = column.read_number_long(&data) as u64 + content_offset;
+                    cpk_file.file_offset = column.read_number(&data) as u64 + content_offset;
                 } else if col_idx == user_string_col_idx {
                     let string_offset = u32::from_be_bytes(data.try_into().unwrap());
                     cpk_file.user_string = Some(read_utf_string(&string_pool, string_offset as usize));

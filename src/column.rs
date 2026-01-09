@@ -54,21 +54,7 @@ impl ColumnDescriptor {
         }
     }
 
-    pub fn read_number_long(&self, data: &[u8]) -> i64 {
-        match self.column_type() {
-            ColumnType::Byte => data[0] as i64,
-            ColumnType::SByte => data[0] as i8 as i64,
-            ColumnType::UInt16 => u16::from_be_bytes(data[..2].try_into().unwrap()) as i64,
-            ColumnType::Int16 => i16::from_be_bytes(data[..2].try_into().unwrap()) as i64,
-            ColumnType::UInt32 => u32::from_be_bytes(data[..4].try_into().unwrap()) as i64,
-            ColumnType::Int32 => i32::from_be_bytes(data[..4].try_into().unwrap()) as i64,
-            ColumnType::UInt64 => u64::from_be_bytes(data[..8].try_into().unwrap()) as i64,
-            ColumnType::Int64 => i64::from_be_bytes(data[..8].try_into().unwrap()),
-            _ => -1,
-        }
-    }
-
-    pub fn read_number_int(&self, data: &[u8]) -> i64 {
+    pub fn read_number(&self, data: &[u8]) -> i64 {
         match self.column_type() {
             ColumnType::Byte => data[0] as i64,
             ColumnType::SByte => data[0] as i8 as i64,
