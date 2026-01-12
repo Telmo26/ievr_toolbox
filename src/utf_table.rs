@@ -1,7 +1,9 @@
 use std::{
     array::TryFromSliceError,
-    io::{Read, Seek},
+    sync::Arc,
 };
+
+use memmap2::Mmap;
 
 pub const BASE_OFFSET: u32 = 0x08;
 
@@ -14,21 +16,15 @@ pub struct UTFTable {
 }
 
 impl UTFTable {
-    pub fn new(file: &mut (impl Read + Seek)) -> std::io::Result<UTFTable> {
+    pub fn new(file: &Arc<Mmap>, offset: usize) -> std::io::Result<UTFTable> {
         // Skip the CPK, TOC, ITOC... header and the unused fields
-        file.seek(std::io::SeekFrom::Current(8))?;
 
         // Read the 4-byte size field
-        let mut size_buf = [0u8; 4];
-        file.read_exact(&mut size_buf)?;
+        let size_buf: [u8; 4] = file[8 + offset..12 + offset].try_into().unwrap();
         let size = u32::from_le_bytes(size_buf) as usize;
 
-        // Skip the 4-bytes unused data to the start of the UTF table
-        file.seek(std::io::SeekFrom::Current(4))?;
-
         // Read the entire table
-        let mut data = vec![0u8; size];
-        file.read_exact(&mut data)?;
+        let data = &file[16 + offset..16 + size + offset];
 
         if is_utf_encrypted(&data) {
             println!("Encrypted CPK")
@@ -37,7 +33,7 @@ impl UTFTable {
         let metadata = Metadata::new(&data);
 
         Ok(UTFTable {
-            data,
+            data: data.to_vec(),
             metadata,
         })
     }
@@ -47,7 +43,7 @@ impl UTFTable {
 pub struct Metadata {
     pub rows_offset: u16,
     pub string_pool_offset: u32,
-    pub data_pool_offset: u32,
+    pub _data_pool_offset: u32,
     pub column_count: u16,
     pub row_size_bytes: u16,
     pub row_count: u32,
@@ -57,14 +53,14 @@ impl Metadata {
     fn new(data: &[u8]) -> Metadata {
         let rows_offset = read_u16_be(&data, 0x0A).unwrap() + BASE_OFFSET as u16;
         let string_pool_offset = read_u32_be(&data, 0x0C).unwrap() + BASE_OFFSET;
-        let data_pool_offset = read_u32_be(&data, 0x10).unwrap() + BASE_OFFSET;
+        let _data_pool_offset = read_u32_be(&data, 0x10).unwrap() + BASE_OFFSET;
         let column_count = read_u16_be(&data, 0x18).unwrap();
         let row_size_bytes = read_u16_be(&data, 0x1A).unwrap();
         let row_count = read_u32_be(&data, 0x1C).unwrap();
         Metadata {
             rows_offset,
             string_pool_offset,
-            data_pool_offset,
+            _data_pool_offset,
             column_count,
             row_size_bytes,
             row_count,

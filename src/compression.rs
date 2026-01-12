@@ -1,11 +1,13 @@
-use std::{fs::{self, File}, io::{self, BufReader, BufWriter, Read, Seek, Write}, path::{Path, PathBuf}};
+use std::{fs::File, io::{self, BufWriter, Write}, path::PathBuf};
 
 mod utils;
 mod reverse_bit_reader;
 
-pub use utils::{is_compressed, replace_prefix};
+pub use utils::is_compressed;
 
 use reverse_bit_reader::ReverseBitReader;
+
+use crate::cpk_file::CpkFile;
 
 /// Constants defined in the original algorithm
 const UNCOMPRESSED_DATA_SIZE: usize = 0x100;
@@ -13,31 +15,20 @@ const MIN_COPY_LENGTH: usize = 3;
 
 #[derive(Debug, Default)]
 pub struct Decompressor {
-    input_data_buffer: Vec<u8>,
     output_data_buffer: Vec<u8>,
 }
 
 impl Decompressor {
-    pub fn decompress(&mut self, extracted_file_path: &PathBuf, extracted_file: &File, extract_folder: &Path) -> std::io::Result<()> {
-        let decompression_path = replace_prefix(extracted_file_path, extract_folder);
-        let parent_dir = decompression_path.parent().unwrap();
-        // Create the directory structure needed for decompression
-        fs::create_dir_all(parent_dir)?;
-        
-        let decompressed_file = File::create(&decompression_path)
+    pub fn decompress(&mut self, extracted_file_path: &PathBuf, extracted_file: &CpkFile) -> std::io::Result<()> {
+        let decompressed_file = File::create(extracted_file_path)
             .expect("Failed to create the decompression file");
-
-        // We clear the input buffer
-        self.input_data_buffer.clear();
-
-        let mut buffered_reader = BufReader::with_capacity(128 * 1024, extracted_file);
-        buffered_reader.seek(io::SeekFrom::Start(0))?; // We reset the cursor in the file
-        buffered_reader.read_to_end(&mut self.input_data_buffer)?;
 
         // We clear the output buffer before decompressing
         self.output_data_buffer.clear();
-        decompress_layla(&self.input_data_buffer, &mut self.output_data_buffer)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Decompression failed"))?;
+        if let Some(compressed_data) = extracted_file.data() {
+            decompress_layla(compressed_data, &mut self.output_data_buffer)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Decompression failed"))?;
+        }
 
         let mut buffered_writer = BufWriter::with_capacity(128 * 1024, decompressed_file);
         buffered_writer.write_all(&self.output_data_buffer)?;
@@ -48,15 +39,15 @@ impl Decompressor {
 }
 
 
-fn decompress_layla(input: &[u8], output: &mut Vec<u8>) -> Option<()> {
-    if input.len() < 0x10 {
+fn decompress_layla(compressed_data: &[u8], output: &mut Vec<u8>) -> Option<()> {
+    if compressed_data.len() < 0x10 {
         return None;
     }
     
     // uncompSizeOfCompData is at offset 8 (u32 LE)
-    let uncomp_size_of_comp_data = u32::from_le_bytes(input[8..12].try_into().unwrap()) as usize;
+    let uncomp_size_of_comp_data = u32::from_le_bytes(compressed_data[8..12].try_into().unwrap()) as usize;
     // uncompHeaderOffset is at offset 12 (u32 LE)
-    let uncomp_header_offset = u32::from_le_bytes(input[12..16].try_into().unwrap()) as usize;
+    let uncomp_header_offset = u32::from_le_bytes(compressed_data[12..16].try_into().unwrap()) as usize;
 
     let total_output_size = uncomp_size_of_comp_data + UNCOMPRESSED_DATA_SIZE;
 
@@ -67,15 +58,15 @@ fn decompress_layla(input: &[u8], output: &mut Vec<u8>) -> Option<()> {
 
     let header_src_start = uncomp_header_offset + 0x10;
 
-    if header_src_start + UNCOMPRESSED_DATA_SIZE > input.len() {
+    if header_src_start + UNCOMPRESSED_DATA_SIZE > compressed_data.len() {
         return None; // Out of bounds safety
     }
 
     // Copy the header to the start of the output
     output[0..UNCOMPRESSED_DATA_SIZE]
-        .copy_from_slice(&input[header_src_start..header_src_start + UNCOMPRESSED_DATA_SIZE]);
+        .copy_from_slice(&compressed_data[header_src_start..header_src_start + UNCOMPRESSED_DATA_SIZE]);
 
-    let mut reader = ReverseBitReader::new(input, header_src_start);
+    let mut reader = ReverseBitReader::new(compressed_data, header_src_start);
 
     // We start reading from the back of the file
     let mut write_index = total_output_size.saturating_sub(1);

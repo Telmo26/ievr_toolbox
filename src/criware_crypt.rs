@@ -1,4 +1,6 @@
-use std::{fs::File, path::Path, io::{Read, Seek, SeekFrom, Write}};
+use std::{fs::File, io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write}, path::Path};
+
+const BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8 MB
 
 pub struct CriwareCrypt {
     input_file: File,
@@ -32,18 +34,22 @@ impl CriwareCrypt {
             return Ok(());
         }
 
-        // Stream decrypt
-        let mut buffer = vec![0u8; 1024 * 1024]; // 1 MB
+        let file = self.input_file.try_clone().unwrap();
+
+        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+        let mut writer = BufWriter::with_capacity(BUFFER_SIZE, output_file);
+
+        let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut offset: u64 = 0;
 
         loop {
-            let bytes_read = self.input_file.read(&mut buffer)?;
+            let bytes_read = reader.read(&mut buffer)?;
             if bytes_read == 0 {
                 break;
             }
 
             self.decrypt_block(&mut buffer[..bytes_read], offset);
-            output_file.write_all(&buffer[..bytes_read])?;
+            writer.write_all(&buffer[..bytes_read])?;
 
             offset += bytes_read as u64;
         }

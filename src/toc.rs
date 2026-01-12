@@ -173,17 +173,3 @@ pub fn toc_reader(table: &UTFTable, content_offset: u64) -> Vec<CpkFile> {
     result
 }
 
-/// Reads a string from a CRI UTF table string pool.
-///
-/// `string_pool` = slice containing the string pool bytes  
-/// `offset` = offset into the string pool (from `CriString`)  
-pub fn read_utf_string(string_pool: &[u8], offset: usize) -> String {
-    // The string starts at offset
-    let sub = &string_pool[offset..];
-
-    // Find the null terminator
-    let end = sub.iter().position(|&b| b == 0).unwrap_or(sub.len());
-    let bytes = &sub[..end];
-
-    String::from_utf8_lossy(bytes).into_owned()
-}
