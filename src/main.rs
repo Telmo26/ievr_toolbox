@@ -4,7 +4,12 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 use std::{
-    collections::BinaryHeap, fs::{self, DirBuilder}, io, path::{Path, PathBuf}, thread, time::Instant
+    collections::BinaryHeap,
+    fs::{self, DirBuilder},
+    io,
+    path::{Path, PathBuf},
+    thread,
+    time::Instant,
 };
 
 mod memory_budget;
@@ -19,23 +24,23 @@ use ievr_toolbox::{
 const TMP_PATH: &str = "temp";
 
 const MB: usize = 1024 * 1024;
-const GB: usize =  1024 * MB;
+const GB: usize = 1024 * MB;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "CPK File Extractor", long_about = None)]
+#[command(author, version, about = "IE VR Toolbox", long_about = None)]
 struct Args {
     /// Path to the game's folder containing CPK files
     #[arg(short, long, value_name = "INPUT")]
     input: PathBuf,
 
-    // The output folder where the files will be dumped
+    /// Optional: the output folder where the files will be dumped
     #[arg(short, long, value_name = "OUT", default_value = "extracted")]
     output: PathBuf,
 
-    // The total amount of cores allocated to the program. A default value of 0 will
-    // use all available cores
-    #[arg(short, long, value_name = "CORES", default_value = "0")]
-    cores: usize,
+    /// Optional: the total amount of threads allocated to the program.
+    /// A value of 0 will use all available threads
+    #[arg(short, long, value_name = "THREADS", default_value = "0")]
+    threads: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -53,9 +58,13 @@ fn main() -> std::io::Result<()> {
     let mut dir_builder = DirBuilder::new();
     dir_builder.recursive(true);
 
-    dir_builder.create(TMP_PATH)?;
     let temp_folder = PathBuf::from(TMP_PATH);
-
+    if temp_folder.exists() {
+        fs::remove_dir_all(&temp_folder).unwrap();
+    }
+    
+    dir_builder.create(TMP_PATH)?;
+    
     let extract_folder = &args.output;
     if !extract_folder.exists() {
         dir_builder.create(extract_folder)?;
@@ -76,12 +85,16 @@ fn main() -> std::io::Result<()> {
     files_to_process.reverse();
 
     let total_files = files_to_process.len() as u64;
-    let total_file_size: u64 = files_to_process.iter().map(|path| {
-        fs::metadata(path).unwrap().len()
-    })
-    .sum();
+    let total_file_size: u64 = files_to_process
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .sum();
 
-    println!("Found {} CPK files ({} GiB). Starting extraction...", total_files, total_file_size / GB as u64);
+    println!(
+        "Found {} CPK files ({} GiB). Starting extraction...",
+        total_files,
+        total_file_size / GB as u64
+    );
 
     // We compute the number of threads allocated to the program
 
@@ -89,31 +102,39 @@ fn main() -> std::io::Result<()> {
         .map(|n| n.get())
         .unwrap_or(8);
 
-    let threads_in_use = if args.cores < 1 || args.cores > max_threads {
+    let threads_in_use = if args.threads < 1 || args.threads > max_threads {
         max_threads
     } else {
-        args.cores
+        args.threads
     };
 
     let (decrypt_threads, extract_threads, decompress_threads) = compute_threads(threads_in_use);
 
     // We compute the memory limits based on the memory allocated to the program
 
-    let system = System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
+    let system = System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+    );
 
     let memory = system.available_memory() as usize;
 
-    println!("Total memory: {memory}");
-
-    let size_threshold = memory / decrypt_threads;
-    let cpk_budget = MemoryBudget::new(memory * 2/3);
-    let decompress_budget = MemoryBudget::new(memory * 1/3);
+    let size_threshold = 1 * GB;
+    let cpk_budget = MemoryBudget::new(memory * 6 / 10);
+    let decompress_budget = MemoryBudget::new(memory * 4 / 10);
 
     // We display the current settings
 
-    println!("Decryption threads: {} - Memory allocated: {} GiB", decrypt_threads, (memory * 2/3) / GB);
+    println!(
+        "Decryption threads: {} - Memory allocated: {:.1} GiB",
+        decrypt_threads,
+        (memory as f64 * 0.6) / GB as f64
+    );
     println!("Extraction threads: {:?}", extract_threads);
-    println!("Decompression threads: {} - Memory allocated: {} GiB", decompress_threads, (memory / 3) / GB);
+    println!(
+        "Decompression threads: {} - Memory allocated: {:.1} GiB",
+        decompress_threads,
+        (memory as f64 * 0.4) / GB as f64
+    );
 
     // We create the channels that will be used to communicate
 
@@ -134,7 +155,7 @@ fn main() -> std::io::Result<()> {
 
     let decryption_pb = mp.add(ProgressBar::new(total_file_size));
     decryption_pb.set_style(ProgressStyle::with_template(
-        "{spinner:.green} Decrypting files [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+        "{spinner:.green} Decrypting CPKs [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
     )
     .unwrap()
     .progress_chars("#>-"));
@@ -158,7 +179,8 @@ fn main() -> std::io::Result<()> {
         decrypt_handles.push(thread::spawn(move || {
             for original_file in cpk_files.iter().skip(i).step_by(decrypt_threads) {
                 let file_size = fs::metadata(original_file).unwrap().len() as usize;
-                if file_size < size_threshold { // This will map the file to RAM instead of a file
+                if file_size < size_threshold {
+                    // This will map the file to RAM instead of a file
                     cpk_budget.acquire(file_size as usize);
                 }
 
@@ -252,10 +274,11 @@ fn main() -> std::io::Result<()> {
                 decompress_budget.release(extracted_file.extract_size as usize);
 
                 let file_size = extracted_file.cpk_size().unwrap();
-                if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold { // If it has been mapped to RAM
+                if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold {
+                    // If it has been mapped to RAM
                     cpk_budget.release(file_size);
                 }
-                
+
                 extract_pb.inc(extracted_file.extract_size as u64);
             }
         }));
@@ -295,11 +318,12 @@ fn main() -> std::io::Result<()> {
 
     extract_pb.finish();
 
+    fs::remove_dir_all(temp_folder).unwrap();
+
     let duration = start_time.elapsed();
 
     println!("\n--- Extraction Summary ---");
     println!("Total time: {:.2?}", duration);
-    println!("Files processed: {}", total_files);
 
     Ok(())
 }
@@ -322,12 +346,12 @@ fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(PathBuf)) -> io::Result<()> {
 }
 
 fn compute_threads(threads_in_use: usize) -> (usize, usize, usize) {
-    // We only want 1 extraction thread because it is so fast,
+    // We only want 2 extraction threads because extraction is so fast,
     // it doesn't copy anything. It simply extracts metadata from
     // the decrypted CPK and reorganizes it
-    let extract_threads = 1.max(threads_in_use / 8); // We enable two extraction threads for 8-cores CPUs
+    let extract_threads = 2;
 
-    let decrypt_threads = threads_in_use / 3;
+    let decrypt_threads = threads_in_use / 2;
     let decompress_threads = threads_in_use - decrypt_threads - extract_threads;
 
     (decrypt_threads, extract_threads, decompress_threads.max(1))

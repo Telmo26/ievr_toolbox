@@ -76,22 +76,6 @@ impl CriwareCrypt {
     }
 
     fn decrypt_block(&mut self, buffer: &mut [u8], file_offset: u64) {
-        // let mut i = 0;
-        // while i + 4 < buffer.len() {
-        //     let global_pos = file_offset + i as u64;
-
-        //     let crc = self.update_crc_state(global_pos as u32);            
-            
-        //     let keys = key_stream(crc);
-
-        //     buffer[i..i+4].iter_mut()
-        //         .zip(keys)
-        //         .for_each(|(b, k)| {
-        //             *b ^= k
-        //         });
-
-        //     i += 4;
-        // }
         let (prefix, middle, suffix) = unsafe { buffer.align_to_mut::<u32>() };
         
         let mut current_pos = file_offset;
@@ -202,8 +186,6 @@ fn key_stream(crc: u32) -> [u8; 4] {
 fn key_stream_u32(crc: u32) -> u32 {
     let mut final_ks: u32 = 0;
 
-    // We still use a small unrolled loop because the 'shift' varies per lane,
-    // but the bit-logic inside is now flattened for the compiler to optimize.
     for lane in 0..4 {
         let s = lane << 1;
         
