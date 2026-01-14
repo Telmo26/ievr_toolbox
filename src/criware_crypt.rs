@@ -57,6 +57,24 @@ impl CriwareCrypt {
         Ok(())
     }
 
+    pub fn decrypt_ram(&mut self) -> std::io::Result<Vec<u8>> {
+        let mut reader = BufReader::with_capacity(BUFFER_SIZE, &self.input_file);
+
+        let size = self.input_file.metadata()?.len() as usize;
+
+        let mut buffer = Vec::with_capacity(size);
+        reader.read_to_end(&mut buffer)?;
+
+        // If already decrypted, just copy
+        if &buffer[0..4] == b"CPK " {
+            return Ok(buffer);
+        }
+
+        self.decrypt_block(&mut buffer, 0);
+        Ok(buffer)
+
+    }
+
     fn decrypt_block(&mut self, buffer: &mut [u8], file_offset: u64) {
         // let mut i = 0;
         // while i + 4 < buffer.len() {

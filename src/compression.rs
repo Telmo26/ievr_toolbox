@@ -1,8 +1,9 @@
-use std::{fs::File, io::{self, BufWriter, Write}, path::PathBuf};
+use std::{fs::OpenOptions, io, path::PathBuf};
 
 mod utils;
 mod reverse_bit_reader;
 
+use memmap2::MmapMut;
 pub use utils::is_compressed;
 
 use reverse_bit_reader::ReverseBitReader;
@@ -14,24 +15,27 @@ const UNCOMPRESSED_DATA_SIZE: usize = 0x100;
 const MIN_COPY_LENGTH: usize = 3;
 
 #[derive(Debug, Default)]
-pub struct Decompressor {
-    output_data_buffer: Vec<u8>,
-}
+pub struct Decompressor {}
 
 impl Decompressor {
     pub fn decompress(&mut self, extracted_file_path: &PathBuf, extracted_file: &CpkFile) -> std::io::Result<()> {
-        let decompressed_file = File::create(extracted_file_path)
-            .expect("Failed to create the decompression file");
+        let decompressed_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(extracted_file_path)?;
 
-        // We clear the output buffer before decompressing
-        self.output_data_buffer.clear();
+        decompressed_file.set_len(extracted_file.extract_size as u64)?;
+
+        let mut mmap = unsafe {
+            MmapMut::map_mut(&decompressed_file)?
+        };
+
         if let Some(compressed_data) = extracted_file.data() {
-            decompress_layla(compressed_data, &mut self.output_data_buffer)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Decompression failed"))?;
+            decompress_layla(compressed_data, &mut mmap)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Decompression failed"))?;
         }
-
-        let mut buffered_writer = BufWriter::with_capacity(128 * 1024, decompressed_file);
-        buffered_writer.write_all(&self.output_data_buffer)?;
 
         Ok(())
     }
@@ -39,7 +43,7 @@ impl Decompressor {
 }
 
 
-fn decompress_layla(compressed_data: &[u8], output: &mut Vec<u8>) -> Option<()> {
+fn decompress_layla(compressed_data: &[u8], output: &mut MmapMut) -> Option<()> {
     if compressed_data.len() < 0x10 {
         return None;
     }
@@ -51,10 +55,13 @@ fn decompress_layla(compressed_data: &[u8], output: &mut Vec<u8>) -> Option<()> 
 
     let total_output_size = uncomp_size_of_comp_data + UNCOMPRESSED_DATA_SIZE;
 
-    if output.capacity() < total_output_size {
-        output.reserve(total_output_size);
-    }
-    output.resize(total_output_size, 0);
+    // assert_eq!(
+    //     output.len(), 
+    //     total_output_size,
+    //     "Extract size mismatch: header says {}, metadata says {}",
+    //     total_output_size,
+    //     output.len()
+    // );
 
     let header_src_start = uncomp_header_offset + 0x10;
 

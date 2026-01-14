@@ -1,4 +1,4 @@
-use std::{fs::{self, File, OpenOptions}, io::{Seek, Write}, path::{Path, PathBuf}, sync::Arc};
+use std::{fs::{self, File, OpenOptions}, io::{Seek, Write}, ops::Deref, path::{Path, PathBuf}, sync::Arc};
 
 use memmap2::Mmap;
 
@@ -18,10 +18,26 @@ pub use crate::{
     cpk_file::CpkFile
 };
 
-pub type DecryptedCpk = Arc<Mmap>;
+pub type DecryptedCpk = Arc<CpkData>;
+
+#[derive(Debug)]
+pub enum CpkData {
+    Big(Mmap),
+    Small(Vec<u8>)
+}
+
+impl Deref for CpkData {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            CpkData::Big(mmap) => &mmap,
+            CpkData::Small(vec) => &vec,
+        }
+    }
+}
 
 pub fn dump_cpk(input_path: PathBuf, tmp_folder: &PathBuf, extract_folder: &PathBuf) {
-    let decrypted_cpk = decrypt_cpk(&input_path, &tmp_folder);
+    let decrypted_cpk = decrypt_cpk(&input_path, &tmp_folder, 256 * 1024 * 1024);
 
     let mut toc_parser = TocParser::default();
     let extracted_files = extract_cpk_files(decrypted_cpk, &mut toc_parser);
@@ -33,36 +49,43 @@ pub fn dump_cpk(input_path: PathBuf, tmp_folder: &PathBuf, extract_folder: &Path
     }
 }
 
-pub fn decrypt_cpk(input_path: &PathBuf, tmp_folder: &PathBuf) -> DecryptedCpk {
+pub fn decrypt_cpk(input_path: &PathBuf, tmp_folder: &PathBuf, size_threshold: usize) -> DecryptedCpk {
     let mut tmp_file_path = tmp_folder.clone();
     tmp_file_path.push(input_path.file_name().unwrap());
 
     let mut crypt_file = CriwareCrypt::new(&input_path)
         .expect("Unable to load the CPK file in the decryption module");
     
-    let decrypted_cpk = if Path::exists(&tmp_file_path) {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&tmp_file_path)
-            .expect("Unable to create output file")
-    } else {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_file_path)
-            .expect("Unable to open pre-existing temporary file");
-        
-        crypt_file.decrypt(&mut f)
-            .expect("Unable to decrypt file");
+    let decrypted_cpk = if fs::metadata(input_path).unwrap().len() as usize >= size_threshold {
+        let f = if Path::exists(&tmp_file_path) {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&tmp_file_path)
+                .expect("Unable to create output file")
+        } else {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_file_path)
+                .expect("Unable to open pre-existing temporary file");
+            
+            crypt_file.decrypt(&mut f)
+                .expect("Unable to decrypt file");
 
-        f.rewind().expect("Unable to rewind output file after decryption"); 
-        f
+            f.rewind().expect("Unable to rewind output file after decryption"); 
+            f
+        };
+        Arc::new(CpkData::Big(unsafe { Mmap::map(&f).unwrap() }))
+    } else {
+        Arc::new(CpkData::Small(crypt_file.decrypt_ram().unwrap()))
     };
 
-    let decrypted_cpk = Arc::new(unsafe { Mmap::map(&decrypted_cpk).unwrap() });
+    // let decrypted_cpk = Arc::new(crypt_file.decrypt_ram().unwrap());
+
+    // let decrypted_cpk = Arc::new(unsafe { Mmap::map(&decrypted_cpk).unwrap() });
 
     decrypted_cpk
 }

@@ -1,9 +1,8 @@
 use std::{
     array::TryFromSliceError,
-    sync::Arc,
 };
 
-use memmap2::Mmap;
+use crate::DecryptedCpk;
 
 pub const BASE_OFFSET: u32 = 0x08;
 
@@ -16,7 +15,7 @@ pub struct UTFTable {
 }
 
 impl UTFTable {
-    pub fn new(file: &Arc<Mmap>, offset: usize) -> std::io::Result<UTFTable> {
+    pub fn new(file: &DecryptedCpk, offset: usize) -> std::io::Result<UTFTable> {
         // Skip the CPK, TOC, ITOC... header and the unused fields
 
         // Read the 4-byte size field

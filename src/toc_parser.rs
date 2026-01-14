@@ -186,12 +186,12 @@ impl TocParser {
     }
 
     fn get_or_insert(&mut self, bytes: &[u8]) -> Arc<str> {
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        let bytes = &bytes[..end];
         self.string_pool.entry(bytes.to_vec())
-            .or_insert_with(|| {
-                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                let bytes = &bytes[..end];
+            .or_insert(
                 Arc::<str>::from(str::from_utf8(bytes).unwrap())
-            })
+            )
             .clone()
     }
 }

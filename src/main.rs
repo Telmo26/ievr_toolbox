@@ -1,12 +1,25 @@
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use clap::Parser;
 use crossbeam;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
-use std::{fs::{self, DirBuilder}, io, path::{Path, PathBuf}, thread, time::Instant};
+use std::{
+    collections::BinaryHeap, fs::{self, DirBuilder}, io, path::{Path, PathBuf}, thread, time::Instant
+};
 
-use ievr_toolbox::{self, CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk, extract_cpk_files};
+mod memory_budget;
+
+use memory_budget::MemoryBudget;
+
+use ievr_toolbox::{
+    self, CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk,
+    extract_cpk_files,
+};
 
 const TMP_PATH: &str = "temp";
+
+const MB: usize = 1024 * 1024;
+const GB: usize =  1024 * MB;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "CPK File Extractor", long_about = None)]
@@ -19,10 +32,10 @@ struct Args {
     #[arg(short, long, value_name = "OUT", default_value = "extracted")]
     output: PathBuf,
 
-    // The total amount of threads allocated to the program. A default value of 0 will
-    // use all available threads
-    #[arg(short, long, value_name = "THREADS", default_value = "0")]
-    threads: usize
+    // The total amount of cores allocated to the program. A default value of 0 will
+    // use all available cores
+    #[arg(short, long, value_name = "CORES", default_value = "0")]
+    cores: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -58,48 +71,74 @@ fn main() -> std::io::Result<()> {
     })?;
 
     // We sort the work by biggest files first
-    files_to_process.sort_by_key(|p| {
-        std::fs::metadata(p).map(|m| m.len()).unwrap()
-    });
+
+    files_to_process.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap());
     files_to_process.reverse();
 
     let total_files = files_to_process.len() as u64;
-    println!("Found {} CPK files. Starting extraction...", total_files);
+    let total_file_size: u64 = files_to_process.iter().map(|path| {
+        fs::metadata(path).unwrap().len()
+    })
+    .sum();
+
+    println!("Found {} CPK files ({} GiB). Starting extraction...", total_files, total_file_size / GB as u64);
+
+    // We compute the number of threads allocated to the program
 
     let max_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
 
-    let threads_in_use = if args.threads < 1 || args.threads > max_threads {
+    let threads_in_use = if args.cores < 1 || args.cores > max_threads {
         max_threads
     } else {
-        args.threads
+        args.cores
     };
 
     let (decrypt_threads, extract_threads, decompress_threads) = compute_threads(threads_in_use);
 
-    println!("Decryption threads: {:?}", decrypt_threads);
-    println!("Extraction threads: {:?}", extract_threads);
-    println!("Decompression threads: {:?}", decompress_threads);
+    // We compute the memory limits based on the memory allocated to the program
 
-    let (dec_tx, dec_rx) = crossbeam::channel::unbounded::<DecryptedCpk>();
-    let (ext_tx, ext_rx) = crossbeam::channel::unbounded::<CpkFile>();
+    let system = System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
+
+    let memory = system.available_memory() as usize;
+
+    println!("Total memory: {memory}");
+
+    let size_threshold = memory / decrypt_threads;
+    let cpk_budget = MemoryBudget::new(memory * 2/3);
+    let decompress_budget = MemoryBudget::new(memory * 1/3);
+
+    // We display the current settings
+
+    println!("Decryption threads: {} - Memory allocated: {} GiB", decrypt_threads, (memory * 2/3) / GB);
+    println!("Extraction threads: {:?}", extract_threads);
+    println!("Decompression threads: {} - Memory allocated: {} GiB", decompress_threads, (memory / 3) / GB);
+
+    // We create the channels that will be used to communicate
+
+    let (dec_tx, dec_rx) = crossbeam::channel::bounded::<DecryptedCpk>(2 * decrypt_threads);
+    let (ext_tx, ext_rx) = crossbeam::channel::bounded::<CpkFile>(2 * decompress_threads);
+
+    // We store the handles to the threads to be able to wait for them to finish
 
     let mut decrypt_handles = Vec::with_capacity(decrypt_threads);
     let mut extract_handles = Vec::with_capacity(extract_threads);
     let mut decompress_handles = Vec::with_capacity(decompress_threads);
 
+    // We setup the progress bars
+
     let start_time = Instant::now();
 
     let mp = MultiProgress::new();
 
-    let decryption_pb = mp.add(ProgressBar::new(total_files));
+    let decryption_pb = mp.add(ProgressBar::new(total_file_size));
     decryption_pb.set_style(ProgressStyle::with_template(
-        "{spinner:.green} Decrypting files [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+        "{spinner:.green} Decrypting files [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
     )
     .unwrap()
     .progress_chars("#>-"));
-    decryption_pb.enable_steady_tick(std::time::Duration::from_millis(300));
+    decryption_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let extract_pb = mp.add(ProgressBar::new(0));
     extract_pb.set_style(ProgressStyle::with_template(
@@ -107,21 +146,25 @@ fn main() -> std::io::Result<()> {
     )
     .unwrap()
     .progress_chars("#>-"));
-    extract_pb.enable_steady_tick(std::time::Duration::from_millis(300));
+    extract_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
     for i in 0..decrypt_threads {
         let tx = dec_tx.clone();
         let cpk_files = files_to_process.clone();
         let temp_folder = temp_folder.clone();
         let decrypt_pb = decryption_pb.clone();
+        let cpk_budget = cpk_budget.clone();
 
         decrypt_handles.push(thread::spawn(move || {
             for original_file in cpk_files.iter().skip(i).step_by(decrypt_threads) {
-                // let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+                let file_size = fs::metadata(original_file).unwrap().len() as usize;
+                if file_size < size_threshold { // This will map the file to RAM instead of a file
+                    cpk_budget.acquire(file_size as usize);
+                }
 
-                let decrypted_cpk = decrypt_cpk(&original_file, &temp_folder);
+                let decrypted_cpk = decrypt_cpk(&original_file, &temp_folder, size_threshold);
 
-                decrypt_pb.inc(1);
+                decrypt_pb.inc(file_size as u64);
 
                 tx.send(decrypted_cpk).unwrap();
             }
@@ -135,12 +178,58 @@ fn main() -> std::io::Result<()> {
 
         extract_handles.push(thread::spawn(move || {
             let mut toc_parser = TocParser::default();
-            while let Ok(decrypted_cpk) = dec_rx.recv() {
-                let extracted_files = extract_cpk_files(decrypted_cpk, &mut toc_parser);
-                
-                for extracted_file in extracted_files {
-                    extract_pb.inc_length(extracted_file.extract_size as u64);
-                    ext_tx.send(extracted_file).unwrap();
+            let mut heap = BinaryHeap::<CpkFile>::new();
+            let mut extraction_done = false;
+
+            loop {
+                if extraction_done {
+                    while let Some(extracted_file) = heap.pop() {
+                        extract_pb.inc_length(extracted_file.extract_size as u64);
+                        // If receiver hangs up, stop sending
+                        if ext_tx.send(extracted_file).is_err() {
+                            break;
+                        }
+                    }
+                    break;
+                }
+
+                // Phase 2: If Heap is Empty, we MUST block.
+                // If we don't block here, we hit the 'default' branch below instantly and spin the CPU.
+                if heap.is_empty() {
+                    match dec_rx.recv() {
+                        Ok(decrypted_file) => {
+                            for extracted_file in extract_cpk_files(decrypted_file, &mut toc_parser) {
+                                heap.push(extracted_file);
+                            };
+                        }
+                        Err(_) => extraction_done = true,
+                    }
+                    continue;
+                }
+
+                // Phase 3: Heap has items, and Input is still open.
+                // We prioritize checking for new data (to keep the pipe full), 
+                // but default to sending data if no new messages are ready.
+                crossbeam::select! {
+                    recv(dec_rx) -> msg => {
+                        match msg {
+                            Ok(decrypted_file) => {
+                                for extracted_file in extract_cpk_files(decrypted_file, &mut toc_parser) {
+                                    heap.push(extracted_file);
+                                }
+                            },
+                            Err(_) => extraction_done = true,
+                        }
+                    }
+                    default => {
+                        // We know heap is not empty because of the check in Phase 2
+                        if let Some(extracted_file) = heap.pop() {
+                            extract_pb.inc_length(extracted_file.extract_size as u64);
+                            if ext_tx.send(extracted_file).is_err() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }));
@@ -150,11 +239,23 @@ fn main() -> std::io::Result<()> {
         let ext_rx = ext_rx.clone();
         let extract_folder = extract_folder.clone();
         let extract_pb = extract_pb.clone();
+        let decompress_budget: MemoryBudget = decompress_budget.clone();
+        let cpk_budget = cpk_budget.clone();
 
         decompress_handles.push(thread::spawn(move || {
             let mut decompressor = Decompressor::default();
             while let Ok(extracted_file) = ext_rx.recv() {
+                decompress_budget.acquire(extracted_file.extract_size as usize);
+
                 decompress_files(&mut decompressor, &extracted_file, &extract_folder);
+
+                decompress_budget.release(extracted_file.extract_size as usize);
+
+                let file_size = extracted_file.cpk_size().unwrap();
+                if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold { // If it has been mapped to RAM
+                    cpk_budget.release(file_size);
+                }
+                
                 extract_pb.inc(extracted_file.extract_size as u64);
             }
         }));
@@ -164,7 +265,7 @@ fn main() -> std::io::Result<()> {
         dec_handle.join().unwrap();
     }
 
-    decryption_pb.finish_with_message("Done!");
+    decryption_pb.finish();
 
     drop(dec_tx);
 
@@ -192,7 +293,7 @@ fn main() -> std::io::Result<()> {
         decomp_handle.join().unwrap();
     }
 
-    extract_pb.finish_with_message("Done!");
+    extract_pb.finish();
 
     let duration = start_time.elapsed();
 
@@ -221,13 +322,13 @@ fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(PathBuf)) -> io::Result<()> {
 }
 
 fn compute_threads(threads_in_use: usize) -> (usize, usize, usize) {
-    // We only want 1 extraction thread because it is so fast, 
-    // it doesn't copy anything. It simply extracts metadata from 
+    // We only want 1 extraction thread because it is so fast,
+    // it doesn't copy anything. It simply extracts metadata from
     // the decrypted CPK and reorganizes it
-    let extract_threads = 1; 
+    let extract_threads = 1.max(threads_in_use / 8); // We enable two extraction threads for 8-cores CPUs
 
-    let decrypt_threads = threads_in_use.div_ceil(2);
-    let decompress_threads = threads_in_use - decrypt_threads - 1;
+    let decrypt_threads = threads_in_use / 3;
+    let decompress_threads = threads_in_use - decrypt_threads - extract_threads;
 
     (decrypt_threads, extract_threads, decompress_threads.max(1))
 }
