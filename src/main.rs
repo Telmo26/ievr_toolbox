@@ -31,7 +31,7 @@ const GB: usize = 1024 * MB;
 struct Args {
     /// Path to the game's folder containing CPK files
     #[arg(short, long, value_name = "INPUT")]
-    input: PathBuf,
+    input: String,
 
     /// Optional: the output folder where the files will be dumped
     #[arg(short, long, value_name = "OUT", default_value = "extracted")]
@@ -47,13 +47,16 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     // Access the folder path
-    let game_folder = &args.input;
+    let game_path = args.input.trim_matches('"').trim_end_matches("\\"); // This removes all quotes and trailing backslashes
+
+    let game_folder = Path::new(game_path);
+
     if !game_folder.exists() {
-        eprintln!("Error: The path {:?} does not exist.", game_folder);
+        eprintln!("Error: The path {} does not exist.", game_folder.display());
         std::process::exit(1);
     }
 
-    println!("Scanning game folder: {:?}", game_folder);
+    println!("Scanning game folder: {}", game_folder.display());
 
     let mut dir_builder = DirBuilder::new();
     dir_builder.recursive(true);
@@ -71,7 +74,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let mut files_to_process = Vec::new();
-    visit_dirs(&args.input, &mut |path| {
+    visit_dirs(game_folder, &mut |path| {
         if let Some(ext) = path.extension() {
             if ext.to_string_lossy().to_lowercase() == "cpk" {
                 files_to_process.push(path);
@@ -91,9 +94,9 @@ fn main() -> std::io::Result<()> {
         .sum();
 
     println!(
-        "Found {} CPK files ({} GiB). Starting extraction...",
+        "Found {} CPK files ({:.1} GiB). Starting extraction...",
         total_files,
-        total_file_size / GB as u64
+        total_file_size as f64 / GB as f64
     );
 
     // We compute the number of threads allocated to the program
@@ -138,8 +141,8 @@ fn main() -> std::io::Result<()> {
 
     // We create the channels that will be used to communicate
 
-    let (dec_tx, dec_rx) = crossbeam::channel::bounded::<DecryptedCpk>(2 * decrypt_threads);
-    let (ext_tx, ext_rx) = crossbeam::channel::bounded::<CpkFile>(2 * decompress_threads);
+    let (dec_tx, dec_rx) = crossbeam::channel::unbounded::<DecryptedCpk>();
+    let (ext_tx, ext_rx) = crossbeam::channel::unbounded::<CpkFile>();
 
     // We store the handles to the threads to be able to wait for them to finish
 
@@ -346,10 +349,10 @@ fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(PathBuf)) -> io::Result<()> {
 }
 
 fn compute_threads(threads_in_use: usize) -> (usize, usize, usize) {
-    // We only want 2 extraction threads because extraction is so fast,
+    // We only want 1 extraction thread because extraction is so fast,
     // it doesn't copy anything. It simply extracts metadata from
     // the decrypted CPK and reorganizes it
-    let extract_threads = 2;
+    let extract_threads = 1;
 
     let decrypt_threads = threads_in_use / 2;
     let decompress_threads = threads_in_use - decrypt_threads - extract_threads;
