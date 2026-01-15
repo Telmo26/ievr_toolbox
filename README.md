@@ -8,7 +8,7 @@ This program aims at being a collection of utilities for making modding Inazuma 
 
 # Usage
 
-The tool is only available as a CLI tool for now, as I prefer focusing on adding features before making a GUI. It is available for both Windows and Linux, and a help menu is available by typing `ievr_toolbox -h` or `ievr_toolbox --help`.
+The tool is only available as a CLI tool for now, as I prefer focusing on adding features before making a GUI. It is available for both Windows and Linux. Rust compiles static binaries, so the Linux version should be compatible with most x86_64 distributions. A help menu is available by typing `ievr_toolbox -h` or `ievr_toolbox --help`.
 
 # AI disclosure
 AI was used extensively for this project, mainly to help me understand the purpose of some of the code from the original libraries, since my knowledge of C# is pretty limited.
