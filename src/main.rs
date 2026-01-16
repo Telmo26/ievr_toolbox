@@ -41,6 +41,11 @@ struct Args {
     /// A value of 0 will use all available threads
     #[arg(short, long, value_name = "THREADS", default_value = "0")]
     threads: usize,
+
+    /// Optional: The amount of memory the program is allowed to use in GiB.
+    /// A value of 0 will use the full available memory.
+    #[arg(short, long, value_name = "MEMORY", default_value = "0")]
+    memory: f64
 }
 
 fn main() -> std::io::Result<()> {
@@ -119,7 +124,13 @@ fn main() -> std::io::Result<()> {
         RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
     );
 
-    let memory = system.available_memory() as usize;
+    let available_memory = system.available_memory() as usize;
+
+    let memory = if args.memory == 0.0 || args.memory * GB as f64 > available_memory as f64 {
+        available_memory
+    } else {
+        (args.memory * GB as f64) as usize
+    };    
 
     let size_threshold = 1 * GB;
     let cpk_budget = MemoryBudget::new(memory * 6 / 10);
