@@ -29,4 +29,8 @@ impl MemoryBudget {
         *used -= bytes;
         cv.notify_all();
     }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
 }

@@ -5,12 +5,7 @@ use regex::Regex;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 use std::{
-    collections::BinaryHeap,
-    fs::{self, DirBuilder, File},
-    io::{self, BufRead, BufReader},
-    path::{Path, PathBuf},
-    thread,
-    time::Instant,
+    collections::BinaryHeap, fs::{self, DirBuilder, File}, io::{self, BufRead, BufReader}, path::{Path, PathBuf}, process::exit, thread, time::Instant
 };
 
 use ievr_cfg_bin_editor_core::{Database, Value, parse_database};
@@ -121,7 +116,7 @@ fn main() -> std::io::Result<()> {
         .sum();
 
     println!(
-        "Found {} CPK files ({:.1} GiB) to extract. Starting extraction...",
+        "Found {} CPK files ({:.2} GiB) to extract. Starting extraction...",
         total_files,
         total_file_size as f64 / GB as f64
     );
@@ -154,20 +149,20 @@ fn main() -> std::io::Result<()> {
         (args.memory * GB as f64) as usize
     };    
 
-    let size_threshold = 1 * GB;
+    let size_threshold = memory / 2 / decrypt_threads;
     let cpk_budget = MemoryBudget::new(memory / 2);
     let decompress_budget = MemoryBudget::new(memory / 2);
 
     // We display the current settings
 
     println!(
-        "Decryption threads: {} - Memory allocated: {:.1} GiB",
+        "Decryption threads: {} - Memory allocated: {:.2} GiB",
         decrypt_threads,
         (memory as f64 * 0.5) / GB as f64
     );
     println!("Extraction threads: {:?}", extract_threads);
     println!(
-        "Decompression threads: {} - Memory allocated: {:.1} GiB",
+        "Decompression threads: {} - Memory allocated: {:.2} GiB",
         decompress_threads,
         (memory as f64 * 0.5) / GB as f64
     );
@@ -309,6 +304,11 @@ fn main() -> std::io::Result<()> {
         decompress_handles.push(thread::spawn(move || {
             let mut decompressor = Decompressor::default();
             while let Ok(extracted_file) = ext_rx.recv() {
+                if extracted_file.extract_size as usize > decompress_budget.limit() {
+                    extract_pb.finish_and_clear();
+                    eprintln!("Insufficient memory allocation for decompression, aborting...");
+                    exit(1);
+                }
                 decompress_budget.acquire(extracted_file.extract_size as usize);
 
                 decompress_files(&mut decompressor, &extracted_file, &extract_folder);
@@ -338,11 +338,29 @@ fn main() -> std::io::Result<()> {
         let ext_rx = ext_rx.clone();
         let extract_folder = extract_folder.clone();
         let extract_pb = extract_pb.clone();
+        let decompress_budget: MemoryBudget = decompress_budget.clone();
+        let cpk_budget = cpk_budget.clone();
 
         decompress_handles.push(thread::spawn(move || {
             let mut decompressor = Decompressor::default();
             while let Ok(extracted_file) = ext_rx.recv() {
+                if extracted_file.extract_size as usize > decompress_budget.limit() {
+                    extract_pb.finish_and_clear();
+                    eprintln!("Insufficient memory allocation for decompression, aborting...");
+                    exit(1);
+                }
+                decompress_budget.acquire(extracted_file.extract_size as usize);
+
                 decompress_files(&mut decompressor, &extracted_file, &extract_folder);
+
+                decompress_budget.release(extracted_file.extract_size as usize);
+
+                let file_size = extracted_file.cpk_size().unwrap();
+                if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold {
+                    // If it has been mapped to RAM
+                    cpk_budget.release(file_size);
+                }
+
                 extract_pb.inc(extracted_file.extract_size as u64);
             }
         }));
