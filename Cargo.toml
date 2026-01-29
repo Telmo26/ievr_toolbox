@@ -17,3 +17,5 @@ crossbeam = "0.8"
 indicatif = { version = "0.18", features = ["rayon"] }
 memmap2 = "0.9"
 sysinfo = "0.37.2"
+ievr_cfg_bin_editor_core = { path = "../ievr_cfg_bin_editor/ievr_cfg_bin_editor-core" }
+regex = "1.12.2"

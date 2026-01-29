@@ -1,16 +1,19 @@
-use clap::Parser;
+use clap::{Parser};
 use crossbeam;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use regex::Regex;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 use std::{
     collections::BinaryHeap,
-    fs::{self, DirBuilder},
-    io,
+    fs::{self, DirBuilder, File},
+    io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
     thread,
     time::Instant,
 };
+
+use ievr_cfg_bin_editor_core::{Database, Value, parse_database};
 
 mod memory_budget;
 
@@ -45,7 +48,12 @@ struct Args {
     /// Optional: The amount of memory the program is allowed to use in GiB.
     /// A value of 0 will use the full available memory.
     #[arg(short, long, value_name = "MEMORY", default_value = "0")]
-    memory: f64
+    memory: f64,
+
+    /// Optional: A text file with regex rules for selecting files that need
+    /// extracting
+    #[arg(short, long, value_name = "RULES_FILE", default_value = "")]
+    rules_file: String,
 }
 
 fn main() -> std::io::Result<()> {
@@ -87,6 +95,20 @@ fn main() -> std::io::Result<()> {
         }
     })?;
 
+    let mut selected_files = Vec::new();
+    if args.rules_file != "" {
+        let rules_file_path = PathBuf::from(args.rules_file.trim_matches('"').trim_end_matches("\\")); // This removes all quotes and trailing backslashes
+        let rules_file = File::open(rules_file_path).unwrap();
+
+        let mut cpk_list_path = game_folder.to_path_buf();
+        cpk_list_path.push("cpk_list.cfg.bin");
+
+        let cpk_list = decrypt_cpk(&cpk_list_path, &temp_folder, 1 * GB);
+
+        let cpk_list_database = parse_database(&cpk_list).unwrap();        
+
+        (files_to_process, selected_files) = select_requested_cpks(cpk_list_database, files_to_process, rules_file);
+    }
     // We sort the work by biggest files first
 
     files_to_process.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap());
@@ -99,7 +121,7 @@ fn main() -> std::io::Result<()> {
         .sum();
 
     println!(
-        "Found {} CPK files ({:.1} GiB). Starting extraction...",
+        "Found {} CPK files ({:.1} GiB) to extract. Starting extraction...",
         total_files,
         total_file_size as f64 / GB as f64
     );
@@ -133,21 +155,21 @@ fn main() -> std::io::Result<()> {
     };    
 
     let size_threshold = 1 * GB;
-    let cpk_budget = MemoryBudget::new(memory * 6 / 10);
-    let decompress_budget = MemoryBudget::new(memory * 4 / 10);
+    let cpk_budget = MemoryBudget::new(memory / 2);
+    let decompress_budget = MemoryBudget::new(memory / 2);
 
     // We display the current settings
 
     println!(
         "Decryption threads: {} - Memory allocated: {:.1} GiB",
         decrypt_threads,
-        (memory as f64 * 0.6) / GB as f64
+        (memory as f64 * 0.5) / GB as f64
     );
     println!("Extraction threads: {:?}", extract_threads);
     println!(
         "Decompression threads: {} - Memory allocated: {:.1} GiB",
         decompress_threads,
-        (memory as f64 * 0.4) / GB as f64
+        (memory as f64 * 0.5) / GB as f64
     );
 
     // We create the channels that will be used to communicate
@@ -207,7 +229,8 @@ fn main() -> std::io::Result<()> {
         }));
     }
 
-    for _ in 0..extract_threads {
+    // Extractor thread
+    {
         let dec_rx = dec_rx.clone();
         let ext_tx = ext_tx.clone();
         let extract_pb = extract_pb.clone();
@@ -235,7 +258,9 @@ fn main() -> std::io::Result<()> {
                     match dec_rx.recv() {
                         Ok(decrypted_file) => {
                             for extracted_file in extract_cpk_files(decrypted_file, &mut toc_parser) {
-                                heap.push(extracted_file);
+                                if selected_files.is_empty() || selected_files.contains(&extracted_file.file_name) {
+                                    heap.push(extracted_file);
+                                }
                             };
                         }
                         Err(_) => extraction_done = true,
@@ -251,7 +276,9 @@ fn main() -> std::io::Result<()> {
                         match msg {
                             Ok(decrypted_file) => {
                                 for extracted_file in extract_cpk_files(decrypted_file, &mut toc_parser) {
-                                    heap.push(extracted_file);
+                                    if selected_files.is_empty() || selected_files.contains(&extracted_file.file_name) {
+                                        heap.push(extracted_file);
+                                    }
                                 }
                             },
                             Err(_) => extraction_done = true,
@@ -270,6 +297,7 @@ fn main() -> std::io::Result<()> {
             }
         }));
     }
+    
 
     for _ in 0..decompress_threads {
         let ext_rx = ext_rx.clone();
@@ -369,4 +397,49 @@ fn compute_threads(threads_in_use: usize) -> (usize, usize, usize) {
     let decompress_threads = threads_in_use - decrypt_threads - extract_threads;
 
     (decrypt_threads, extract_threads, decompress_threads.max(1))
+}
+
+fn select_requested_cpks(cpk_list: Database, mut cpk_files: Vec<PathBuf>, rules_file: File) -> (Vec<PathBuf>, Vec<String>) {
+    let mut selected_cpk = Vec::new();
+    let mut selected_files = Vec::new();
+
+    let buf_reader = BufReader::new(rules_file);
+
+    let cpk_table = cpk_list.table("CPK_ITEM").unwrap();
+
+    let lines = buf_reader.lines();
+    for regex in lines.map_while(Result::ok) {
+        let re = match Regex::new(&regex) {
+            Ok(re) => re,
+            Err(_) => {
+                eprintln!("Invalid regex {regex}, ignoring it...");
+                continue
+            }
+        };
+
+        for row in cpk_table.rows() {
+            let file_name = match &row.values[1][0] {
+                Value::String(s) => s.clone(),
+                _ => continue,
+            };
+
+            let cpk_name = match &row.values[3][0] {
+                Value::String(s) => s.clone(),
+                _ => continue,
+            };
+
+            if re.is_match(&file_name) {
+                selected_files.push(file_name.clone());
+                selected_cpk.push(cpk_name.clone());
+            }
+
+        }
+    };
+
+    cpk_files = cpk_files.into_iter().filter(|cpk_file| {
+        let filename = cpk_file.file_name().unwrap().to_str().unwrap();
+        selected_cpk.iter().any(|s| s == filename)
+    }).collect();
+
+    (cpk_files, selected_files)
 }
