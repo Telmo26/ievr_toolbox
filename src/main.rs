@@ -12,7 +12,7 @@ use ievr_cfg_bin_editor_core::{Database, Value, parse_database};
 
 mod memory_budget;
 
-use memory_budget::MemoryBudget;
+use memory_budget::MemoryPool;
 
 use ievr_toolbox::{
     self, CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk,
@@ -29,11 +29,11 @@ const GB: usize = 1024 * MB;
 struct Args {
     /// Path to the game's folder containing CPK files
     #[arg(short, long, value_name = "INPUT")]
-    input: String,
+    input_folder: String,
 
     /// Optional: the output folder where the files will be dumped
     #[arg(short, long, value_name = "OUT", default_value = "extracted")]
-    output: PathBuf,
+    output_folder: PathBuf,
 
     /// Optional: the total amount of threads allocated to the program.
     /// A value of 0 will use all available threads
@@ -55,9 +55,9 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     // Access the folder path
-    let game_path = args.input.trim_matches('"').trim_end_matches("\\"); // This removes all quotes and trailing backslashes
+    let game_path = args.input_folder.trim_matches('"').trim_end_matches("\\"); // This removes all quotes and trailing backslashes
 
-    let game_folder = Path::new(game_path);
+    let mut game_folder = PathBuf::from(game_path);
 
     if !game_folder.exists() {
         eprintln!("Error: The path {} does not exist.", game_folder.display());
@@ -65,6 +65,10 @@ fn main() -> std::io::Result<()> {
     }
 
     println!("Scanning game folder: {}", game_folder.display());
+
+    if !game_folder.ends_with("data") {
+        game_folder.push("data");
+    }
 
     let mut dir_builder = DirBuilder::new();
     dir_builder.recursive(true);
@@ -76,13 +80,13 @@ fn main() -> std::io::Result<()> {
     
     dir_builder.create(TMP_PATH)?;
     
-    let extract_folder = &args.output;
+    let extract_folder = &args.output_folder;
     if !extract_folder.exists() {
         dir_builder.create(extract_folder)?;
     }
 
     let mut files_to_process = Vec::new();
-    visit_dirs(game_folder, &mut |path| {
+    visit_dirs(&game_folder, &mut |path| {
         if let Some(ext) = path.extension() {
             if ext.to_string_lossy().to_lowercase() == "cpk" {
                 files_to_process.push(path);
@@ -116,7 +120,7 @@ fn main() -> std::io::Result<()> {
         .sum();
 
     println!(
-        "Found {} CPK files ({:.2} GiB) to extract. Starting extraction...",
+        "Found {} CPK files ({:.2} GiB) to extract. Starting extraction...\n",
         total_files,
         total_file_size as f64 / GB as f64
     );
@@ -149,22 +153,24 @@ fn main() -> std::io::Result<()> {
         (args.memory * GB as f64) as usize
     };    
 
-    let size_threshold = memory / 2 / decrypt_threads;
-    let cpk_budget = MemoryBudget::new(memory / 2);
-    let decompress_budget = MemoryBudget::new(memory / 2);
+    let size_threshold = memory / decrypt_threads / 2; // We want to avoid the situation where the CPK + the files it contains go over the limit
+    let memory_pool = MemoryPool::new(memory);
+
+    println!("Memory allocated: {:.2} GiB - In-RAM decryption threshold: {} MiB\n", 
+        memory as f64 / GB as f64,
+        size_threshold / MB,
+    );
 
     // We display the current settings
 
     println!(
-        "Decryption threads: {} - Memory allocated: {:.2} GiB",
+        "Decryption threads: {}",
         decrypt_threads,
-        (memory as f64 * 0.5) / GB as f64
     );
     println!("Extraction threads: {:?}", extract_threads);
     println!(
-        "Decompression threads: {} - Memory allocated: {:.2} GiB",
+        "Decompression threads: {}\n",
         decompress_threads,
-        (memory as f64 * 0.5) / GB as f64
     );
 
     // We create the channels that will be used to communicate
@@ -205,14 +211,14 @@ fn main() -> std::io::Result<()> {
         let cpk_files = files_to_process.clone();
         let temp_folder = temp_folder.clone();
         let decrypt_pb = decryption_pb.clone();
-        let cpk_budget = cpk_budget.clone();
+        let memory_pool = memory_pool.clone();
 
         decrypt_handles.push(thread::spawn(move || {
             for original_file in cpk_files.iter().skip(i).step_by(decrypt_threads) {
                 let file_size = fs::metadata(original_file).unwrap().len() as usize;
                 if file_size < size_threshold {
                     // This will map the file to RAM instead of a file
-                    cpk_budget.acquire(file_size as usize);
+                    memory_pool.acquire_decryption(file_size as usize);
                 }
 
                 let decrypted_cpk = decrypt_cpk(&original_file, &temp_folder, size_threshold);
@@ -298,27 +304,26 @@ fn main() -> std::io::Result<()> {
         let ext_rx = ext_rx.clone();
         let extract_folder = extract_folder.clone();
         let extract_pb = extract_pb.clone();
-        let decompress_budget: MemoryBudget = decompress_budget.clone();
-        let cpk_budget = cpk_budget.clone();
+        let memory_pool = memory_pool.clone();
 
         decompress_handles.push(thread::spawn(move || {
             let mut decompressor = Decompressor::default();
             while let Ok(extracted_file) = ext_rx.recv() {
-                if extracted_file.extract_size as usize > decompress_budget.limit() {
+                if extracted_file.extract_size as usize > memory_pool.limit() {
                     extract_pb.finish_and_clear();
                     eprintln!("Insufficient memory allocation for decompression, aborting...");
                     exit(1);
                 }
-                decompress_budget.acquire(extracted_file.extract_size as usize);
+                memory_pool.acquire_decompression(extracted_file.extract_size as usize);
 
                 decompress_files(&mut decompressor, &extracted_file, &extract_folder);
 
-                decompress_budget.release(extracted_file.extract_size as usize);
+                memory_pool.release(extracted_file.extract_size as usize);
 
                 let file_size = extracted_file.cpk_size().unwrap();
-                if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold {
+                if let Some(true) = extracted_file.last_cpk_file() && file_size < size_threshold {
                     // If it has been mapped to RAM
-                    cpk_budget.release(file_size);
+                    memory_pool.release(file_size);
                 }
 
                 extract_pb.inc(extracted_file.extract_size as u64);
@@ -338,27 +343,26 @@ fn main() -> std::io::Result<()> {
         let ext_rx = ext_rx.clone();
         let extract_folder = extract_folder.clone();
         let extract_pb = extract_pb.clone();
-        let decompress_budget: MemoryBudget = decompress_budget.clone();
-        let cpk_budget = cpk_budget.clone();
+        let memory_pool = memory_pool.clone();
 
         decompress_handles.push(thread::spawn(move || {
             let mut decompressor = Decompressor::default();
             while let Ok(extracted_file) = ext_rx.recv() {
-                if extracted_file.extract_size as usize > decompress_budget.limit() {
+                if extracted_file.extract_size as usize > memory_pool.limit() {
                     extract_pb.finish_and_clear();
                     eprintln!("Insufficient memory allocation for decompression, aborting...");
                     exit(1);
                 }
-                decompress_budget.acquire(extracted_file.extract_size as usize);
+                memory_pool.acquire_decompression(extracted_file.extract_size as usize);
 
                 decompress_files(&mut decompressor, &extracted_file, &extract_folder);
 
-                decompress_budget.release(extracted_file.extract_size as usize);
+                memory_pool.release(extracted_file.extract_size as usize);
 
                 let file_size = extracted_file.cpk_size().unwrap();
                 if extracted_file.last_cpk_file().unwrap() && file_size < size_threshold {
                     // If it has been mapped to RAM
-                    cpk_budget.release(file_size);
+                    memory_pool.release(file_size);
                 }
 
                 extract_pb.inc(extracted_file.extract_size as u64);
