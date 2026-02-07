@@ -23,7 +23,7 @@ impl CriwareCrypt {
         })   
     }
 
-    pub fn decrypt(&mut self, output_file: &mut File) -> Result<(), std::io::Error>{
+    pub fn decrypt(&mut self, output_file: &mut File) -> Result<(), std::io::Error> {
         let mut header = [0u8; 4];
         self.input_file.read_exact(&mut header)?;
         self.input_file.seek(SeekFrom::Start(0))?;
@@ -48,7 +48,7 @@ impl CriwareCrypt {
                 break;
             }
 
-            self.decrypt_block(&mut buffer[..bytes_read], offset);
+            self.block_cipher(&mut buffer[..bytes_read], offset);
             writer.write_all(&buffer[..bytes_read])?;
 
             offset += bytes_read as u64;
@@ -70,12 +70,36 @@ impl CriwareCrypt {
             return Ok(buffer);
         }
 
-        self.decrypt_block(&mut buffer, 0);
+        self.block_cipher(&mut buffer, 0);
         Ok(buffer)
 
     }
 
-    fn decrypt_block(&mut self, buffer: &mut [u8], file_offset: u64) {
+    pub fn encrypt(&mut self, output_file: &mut File) -> Result<(), std::io::Error> {
+        let file = self.input_file.try_clone().unwrap();
+
+        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+        let mut writer = BufWriter::with_capacity(BUFFER_SIZE, output_file);
+
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+        let mut offset: u64 = 0;
+
+        loop {
+            let bytes_read = reader.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            self.block_cipher(&mut buffer[..bytes_read], offset);
+            writer.write_all(&buffer[..bytes_read])?;
+
+            offset += bytes_read as u64;
+        }
+
+        Ok(())
+    }
+
+    fn block_cipher(&mut self, buffer: &mut [u8], file_offset: u64) {
         let (prefix, middle, suffix) = unsafe { buffer.align_to_mut::<u32>() };
         
         let mut current_pos = file_offset;

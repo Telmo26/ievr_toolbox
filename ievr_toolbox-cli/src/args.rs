@@ -1,7 +1,14 @@
 use clap::{Parser, Subcommand};
 
 mod dump_args;
-pub use dump_args::DumpArgs;
+mod decrypt_args;
+mod encrypt_args;
+
+pub use self::{
+    dump_args::DumpArgs,
+    decrypt_args::DecryptArgs,
+    encrypt_args::EncryptArgs,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "IE VR Toolbox", long_about = None)]
@@ -13,5 +20,11 @@ pub struct Args {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Extract files from CPK archives
-    Dump(DumpArgs)
+    Dump(DumpArgs),
+    
+    /// Decrypt CRIware encrypted file
+    Decrypt(DecryptArgs),
+
+    /// Encrypt files into CRIware
+    Encrypt(EncryptArgs)
 }
