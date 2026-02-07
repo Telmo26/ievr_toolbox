@@ -131,3 +131,31 @@ pub fn decompress_files(decompressor: &mut Decompressor, extracted_file: &CpkFil
         file_handle.write_all(&mut extracted_file.data().unwrap()).unwrap();
     }
 }
+
+pub fn decrypt(input_path: &Path, output_path: &Path) -> std::io::Result<()> {
+    let mut crypt = CriwareCrypt::new(input_path)?;
+
+    let mut output_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output_path)
+        .expect("Unable to open pre-existing temporary file");
+
+    crypt.decrypt(&mut output_file)
+}
+
+pub fn encrypt(input_path: &Path, output_path: &Path) -> std::io::Result<()> {
+    let mut crypt = CriwareCrypt::new(input_path)?;
+
+    let mut output_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output_path)
+        .expect("Unable to open pre-existing temporary file");
+
+    crypt.encrypt(&mut output_file)
+}
