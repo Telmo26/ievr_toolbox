@@ -1,7 +1,6 @@
-[package]
-name = "ievr_toolbox"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = [ "ievr_toolbox-core","ievr_toolbox-cli"]
 
 [profile.release]
 lto = true        # Link Time Optimization
@@ -9,13 +8,3 @@ codegen-units = 1
 panic = "abort"
 strip = true
 # debug = 1
-
-[dependencies]
-bitflags = "2"
-clap = { version = "4.5", features = ["derive"] }
-crossbeam = "0.8"
-indicatif = { version = "0.18", features = ["rayon"] }
-memmap2 = "0.9"
-sysinfo = "0.37.2"
-ievr_cfg_bin_editor_core = { path = "../ievr_cfg_bin_editor/ievr_cfg_bin_editor-core" }
-regex = "1.12.2"

@@ -1,4 +1,3 @@
-use clap::{Parser};
 use crossbeam;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::Regex;
@@ -10,50 +9,14 @@ use std::{
 
 use ievr_cfg_bin_editor_core::{Database, Value, parse_database};
 
-mod memory_budget;
+use crate::{GB, MB, TMP_PATH, args::DumpArgs, memory_budget::MemoryPool};
 
-use memory_budget::MemoryPool;
-
-use ievr_toolbox::{
-    self, CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk,
+use ievr_toolbox_core::{
+    CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk,
     extract_cpk_files,
 };
 
-const TMP_PATH: &str = "temp";
-
-const MB: usize = 1024 * 1024;
-const GB: usize = 1024 * MB;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about = "IE VR Toolbox", long_about = None)]
-struct Args {
-    /// Path to the game's folder containing CPK files
-    #[arg(short, long, value_name = "INPUT")]
-    input_folder: String,
-
-    /// Optional: the output folder where the files will be dumped
-    #[arg(short, long, value_name = "OUT", default_value = "extracted")]
-    output_folder: PathBuf,
-
-    /// Optional: the total amount of threads allocated to the program.
-    /// A value of 0 will use all available threads
-    #[arg(short, long, value_name = "THREADS", default_value = "0")]
-    threads: usize,
-
-    /// Optional: The amount of memory the program is allowed to use in GiB.
-    /// A value of 0 will use the full available memory.
-    #[arg(short, long, value_name = "MEMORY", default_value = "0")]
-    memory: f64,
-
-    /// Optional: A text file with regex rules for selecting files that need
-    /// extracting
-    #[arg(short, long, value_name = "RULES_FILE", default_value = "")]
-    rules_file: String,
-}
-
-fn main() -> std::io::Result<()> {
-    let args = Args::parse();
-
+pub fn dump(args: DumpArgs) -> std::io::Result<()> {
     // Access the folder path
     let game_path = args.input_folder.trim_matches('"').trim_end_matches("\\"); // This removes all quotes and trailing backslashes
 
