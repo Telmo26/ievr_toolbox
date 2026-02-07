@@ -10,13 +10,13 @@ The selective dumping is possible thanks to my work on [IEVR Cfg Bin Editor](htt
 
 - **Performance**: This is the main reason for this tool's existence, and its only use as of now. The tool dumps game files significantly faster than Viola. However, the dumping process is heavily I/O-bound, so the faster your storage the faster the program will go. Conversely, a slow HDD will probably not see a huge difference in performance. Based on my own testing, this tool is now around 3 times faster than Viola for a full dump.
 
-- **Partial dumping**: This tool supports selecting the files you want to dump. To do so, first create a text file. Each line of the text file must contain a valid [regular expression](https://en.wikipedia.org/wiki/Regular_expression)(REGEX). Every file from the game whose filename (not the directory!) matches one of the regular expressions will be extracted. You then pass the text file to the program using the `-r` or `--rules-file` argument. For example, a text file containing 
-```
-^chara_.*\.cfg\.bin$
-^skill.*\.cfg\.bin$
-```
-will extract all cfg.bin files that start with either "chara_" or "skill_". Of course, you need to know the files' names ahead of time to be able to use it.
-If you don’t know what REGEX is, you can safely ignore this feature and do a full dump. If you still want to use it, AI tools are very good at generating REGEXes.
+- **Partial dumping**: This tool supports selecting the files you want to dump. To do so, first create a text file. Each line of the text file must contain a valid [regular    expression](https://en.wikipedia.org/wiki/Regular_expression)(REGEX). Every file from the game whose filename (not the directory!) matches one of the regular expressions will be extracted. You then pass the text file to the program using the `-r` or `--rules-file` argument. For example, a text file containing 
+    
+    ^chara_.*\.cfg\.bin$
+    ^skill_.*\.cfg\.bin$
+    
+  will extract all cfg.bin files that start with either "chara_" or "skill_". Of course, you need to know the files' names ahead of time to be able to use it.
+  If you don’t know what REGEX is, you can safely ignore this feature and do a full dump. If you still want to use it, AI tools are very good at generating REGEXes.
 
 # Usage
 
@@ -30,7 +30,7 @@ During extraction, high disk usage is normal and the program may take several mi
 
 The only required option is the input folder, selected using the `-i` or `--input-folder` option. It takes the game's root folder as an input. The most basic command is therefore 
 ```
-.\ievr_toolbox-win64.exe -i "path/to/the/game/folder"
+.\ievr_toolbox-cli-win64.exe dump -i "path/to/the/game/folder"
 ```
 This will extract the full game files into the "extracted" folder next to the binary. You can specify an output folder through `-o` or `--output-folder` using the same syntax.
 
