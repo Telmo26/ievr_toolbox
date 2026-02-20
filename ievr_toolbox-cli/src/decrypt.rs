@@ -23,5 +23,12 @@ pub fn decrypt(args: DecryptArgs) -> std::io::Result<()> {
         fs::create_dir_all(folder)?;
     }
 
-    ievr_toolbox_core::decrypt(&file_path, &output_path)
+    let result = ievr_toolbox_core::decrypt(&file_path, &output_path);
+
+    match &result {
+        Ok(()) => println!("File successfully decrypted to {}", output_path.display()),
+        Err(e) => println!("File decryption failed due to {e}"),
+    };
+
+    result
 }
