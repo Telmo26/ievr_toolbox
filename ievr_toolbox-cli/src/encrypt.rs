@@ -23,5 +23,12 @@ pub fn encrypt(args: EncryptArgs) -> std::io::Result<()> {
         fs::create_dir_all(folder)?;
     }
 
-    ievr_toolbox_core::encrypt(&file_path, &output_path)
+    let result = ievr_toolbox_core::encrypt(&file_path, &output_path);
+
+    match &result {
+        Ok(()) => println!("File successfully encrypted to {}", output_path.display()),
+        Err(e) => println!("File encryption failed due to {e}"),
+    };
+
+    result
 }

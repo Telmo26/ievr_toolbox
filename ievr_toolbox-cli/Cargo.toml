@@ -8,6 +8,6 @@ clap = { version = "4.5", features = ["derive"] }
 crossbeam = "0.8"
 indicatif = { version = "0.18", features = ["rayon"] }
 sysinfo = "0.37.2"
-ievr_cfg_bin_editor_core = { path = "../../ievr_cfg_bin_editor/ievr_cfg_bin_editor-core" }
+ievr_cfg_bin_editor_core = { git = "https://github.com/Telmo26/ievr_cfg_bin_editor.git", branch = "main" }
 regex = "1.12.2"
 ievr_toolbox-core = { path = "../ievr_toolbox-core" }
