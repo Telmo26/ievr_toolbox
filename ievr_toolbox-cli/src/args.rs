@@ -3,11 +3,13 @@ use clap::{Parser, Subcommand};
 mod dump_args;
 mod decrypt_args;
 mod encrypt_args;
+mod pack_args;
 
 pub use self::{
     dump_args::DumpArgs,
     decrypt_args::DecryptArgs,
     encrypt_args::EncryptArgs,
+    pack_args::PackArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -26,5 +28,8 @@ pub enum Command {
     Decrypt(DecryptArgs),
 
     /// Encrypt files into CRIware
-    Encrypt(EncryptArgs)
+    Encrypt(EncryptArgs),
+
+    /// Pack mod using vanilla CPK
+    Pack(PackArgs)
 }

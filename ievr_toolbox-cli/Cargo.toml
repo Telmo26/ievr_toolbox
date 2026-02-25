@@ -11,3 +11,4 @@ sysinfo = "0.37.2"
 ievr_cfg_bin_editor_core = { git = "https://github.com/Telmo26/ievr_cfg_bin_editor.git", branch = "main" }
 regex = "1.12.2"
 ievr_toolbox-core = { path = "../ievr_toolbox-core" }
+walkdir = "2.5.0"

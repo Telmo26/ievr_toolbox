@@ -403,6 +403,8 @@ fn select_requested_cpks(cpk_list: Database, mut cpk_files: Vec<PathBuf>, rules_
         };
 
         for row in cpk_table.rows() {
+            if row.name.contains("BEG") || row.name.contains("END") { continue; }
+            
             let file_name = match &row.values[1][0] {
                 Value::String(s) => s.clone(),
                 _ => continue,
