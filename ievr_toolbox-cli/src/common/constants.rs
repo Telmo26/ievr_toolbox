@@ -1,0 +1,4 @@
+pub const TMP_PATH: &str = "temp";
+
+pub const MB: usize = 1024 * 1024;
+pub const GB: usize = 1024 * MB;

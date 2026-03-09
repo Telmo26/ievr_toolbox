@@ -8,12 +8,12 @@ struct State {
 }
 
 #[derive(Clone)]
-pub struct MemoryPool {
+pub struct MemorySemaphore {
     inner: Arc<(Mutex<State>, Condvar)>,
     limit: usize,
 }
 
-impl MemoryPool {
+impl MemorySemaphore {
     pub fn new(limit: usize) -> Self {
         Self {
             inner: Arc::new((Mutex::new(State::default()), Condvar::new())),

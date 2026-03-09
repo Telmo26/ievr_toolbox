@@ -9,9 +9,9 @@ pub struct CriwareCrypt {
 }
 
 impl CriwareCrypt {
-    pub fn new(path: &Path) -> Result<CriwareCrypt, std::io::Error>  {
-        let input_file = File::open(path)?; 
-        let filename = path.file_name().unwrap().to_str().unwrap();
+    pub fn new<T: AsRef<Path>>(path: T) -> Result<CriwareCrypt, std::io::Error>  {
+        let input_file = File::open(&path)?; 
+        let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
 
         let crc32table = Self::initialize_table();
         let keys = Self::compute_key(filename, &crc32table);
