@@ -146,7 +146,7 @@ pub fn decrypt(input_path: &Path, output_path: &Path) -> std::io::Result<()> {
     crypt.decrypt(&mut output_file)
 }
 
-pub fn encrypt(input_path: &Path, output_path: &Path) -> std::io::Result<()> {
+pub fn encrypt<T: AsRef<Path>>(input_path: T, output_path: &Path) -> std::io::Result<()> {
     let mut crypt = CriwareCrypt::new(input_path)?;
 
     let mut output_file = OpenOptions::new()

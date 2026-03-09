@@ -9,7 +9,13 @@ use std::{
 
 use ievr_cfg_bin_editor_core::{Database, Value, parse_database};
 
-use crate::{GB, MB, TMP_PATH, args::DumpArgs, memory_budget::MemoryPool};
+use crate::{ 
+    args::DumpArgs, 
+    common::{
+        memory_semaphore::MemorySemaphore,
+        constants::{GB, MB, TMP_PATH},
+    }
+};
 
 use ievr_toolbox_core::{
     CpkFile, Decompressor, DecryptedCpk, TocParser, decompress_files, decrypt_cpk,
@@ -117,7 +123,7 @@ pub fn dump(args: DumpArgs) -> std::io::Result<()> {
     };    
 
     let size_threshold = memory / decrypt_threads / 2; // We want to avoid the situation where the CPK + the files it contains go over the limit
-    let memory_pool = MemoryPool::new(memory);
+    let memory_pool = MemorySemaphore::new(memory);
 
     println!("Memory allocated: {:.2} GiB - In-RAM decryption threshold: {} MiB\n", 
         memory as f64 / GB as f64,

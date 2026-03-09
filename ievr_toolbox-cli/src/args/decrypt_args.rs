@@ -9,6 +9,6 @@ pub struct DecryptArgs {
     /// Optional: the output path of the decrypted file.
     /// By default the file will be written in the "decrypted"
     /// folder with the same name
-    #[arg(short, long, value_name = "OUT", default_value = "")]
-    pub output_file: String,
+    #[arg(short, long, value_name = "OUT", default_value = None)]
+    pub output_file: Option<String>,
 }
